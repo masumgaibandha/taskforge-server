@@ -30,6 +30,14 @@ app.get("/", (req, res) => {
 });
 
 // Api from here
+app.get("/api/users/:email", async (req, res) => {
+  const email = req.params.email;
+
+  const user = await userCollection.findOne({ email });
+
+  res.send(user);
+});
+
 app.patch("/api/users/:email", async (req, res) => {
   const email = req.params.email;
   const updatedUser = req.body;
