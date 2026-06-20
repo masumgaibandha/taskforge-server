@@ -30,14 +30,46 @@ async function run() {
     const database = client.db("taskforge_db");
     const taskCollection = database.collection("tasks");
     const userCollection = database.collection("user");
+    const proposalCollection = database.collection("proposals");
+
+    // API creation for tasks
+
+    app.post("/api/proposals", async (req, res) => {
+      const proposal = req.body;
+
+      const newProposal = {
+        ...proposal,
+        status: "pending",
+        createdAt: new Date(),
+      };
+
+      const result = await proposalCollection.insertOne(newProposal);
+      res.send(result);
+    });
 
     app.get("/api/freelancers", async (req, res) => {
-      const cursor = userCollection.find()
+      const cursor = userCollection.find({
+        role: "freelancer",
+      });
+
       const results = await cursor.toArray();
       res.send(results);
     });
 
-    // API creation for tasks
+    app.get("/api/tasks/:id", async (req, res) => {
+      const { ObjectId } = require("mongodb");
+
+      try {
+        const task = await taskCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+
+        res.send(task);
+      } catch (error) {
+        res.status(400).send({ message: "Invalid task id" });
+      }
+    });
+
     app.get("/api/tasks", async (req, res) => {
       const query = {};
       if (req.query.taskId) {
