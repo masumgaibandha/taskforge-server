@@ -72,6 +72,22 @@ app.delete("/api/tasks/:id", async (req, res) => {
   res.send(result);
 });
 
+app.patch("/api/tasks/:id", async (req, res) => {
+  const updatedTask = req.body;
+
+  const result = await taskCollection.updateOne(
+    { _id: new ObjectId(req.params.id) },
+    {
+      $set: {
+        ...updatedTask,
+        updatedAt: new Date(),
+      },
+    },
+  );
+
+  res.send(result);
+});
+
 app.get("/api/freelancers", async (req, res) => {
   const result = await userCollection.find({ role: "freelancer" }).toArray();
 
@@ -120,7 +136,6 @@ app.get("/api/proposals", async (req, res) => {
 
 app.patch("/api/proposals/:id", async (req, res) => {
   const { status, taskId } = req.body;
-  
 
   const proposalResult = await proposalCollection.updateOne(
     { _id: new ObjectId(req.params.id) },
