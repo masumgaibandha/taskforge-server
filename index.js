@@ -29,6 +29,29 @@ app.get("/", (req, res) => {
   res.send("TaskForge server is running");
 });
 
+// Api from here
+app.patch("/api/users/:email", async (req, res) => {
+  const email = req.params.email;
+  const updatedUser = req.body;
+
+  const result = await userCollection.updateOne(
+    { email },
+    {
+      $set: {
+        name: updatedUser.name,
+        image: updatedUser.image,
+        phone: updatedUser.phone,
+        location: updatedUser.location,
+        website: updatedUser.website,
+        bio: updatedUser.bio,
+        updatedAt: new Date(),
+      },
+    },
+  );
+
+  res.send(result);
+});
+
 app.get("/api/tasks", async (req, res) => {
   const query = {};
 
