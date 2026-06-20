@@ -99,6 +99,22 @@ app.get("/api/proposals", async (req, res) => {
   res.send(result);
 });
 
+app.patch("/api/proposals/:id", async (req, res) => {
+  const { status } = req.body;
+
+  const result = await proposalCollection.updateOne(
+    { _id: new ObjectId(req.params.id) },
+    {
+      $set: {
+        status,
+        updatedAt: new Date(),
+      },
+    },
+  );
+
+  res.send(result);
+});
+
 app.listen(port, () => {
   console.log(`TaskForge server running on port ${port}`);
 });
