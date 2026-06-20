@@ -80,9 +80,20 @@ app.post("/api/proposals", async (req, res) => {
   };
 
   const result = await proposalCollection.insertOne(newProposal);
+
+  await taskCollection.updateOne(
+    {
+      _id: new ObjectId(proposal.taskId),
+    },
+    {
+      $inc: {
+        proposalCount: 1,
+      },
+    },
+  );
+
   res.send(result);
 });
-
 app.get("/api/proposals", async (req, res) => {
   const query = {};
 
@@ -100,9 +111,10 @@ app.get("/api/proposals", async (req, res) => {
 });
 
 app.patch("/api/proposals/:id", async (req, res) => {
-  const { status } = req.body;
+  const { status, taskId } = req.body;
+  console.log("PATCH proposal:", status, taskId);
 
-  const result = await proposalCollection.updateOne(
+  const proposalResult = await proposalCollection.updateOne(
     { _id: new ObjectId(req.params.id) },
     {
       $set: {
@@ -112,7 +124,21 @@ app.patch("/api/proposals/:id", async (req, res) => {
     },
   );
 
-  res.send(result);
+  if (status === "accepted" && taskId) {
+    const taskUpdateResult = await taskCollection.updateOne(
+      { _id: new ObjectId(taskId) },
+      {
+        $set: {
+          status: "in-progress",
+          updatedAt: new Date(),
+        },
+      },
+    );
+
+    console.log("Task update result:", taskUpdateResult);
+  }
+
+  res.send(proposalResult);
 });
 
 app.listen(port, () => {
