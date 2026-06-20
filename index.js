@@ -29,24 +29,35 @@ async function run() {
 
     const database = client.db("taskforge_db");
     const taskCollection = database.collection("tasks");
+    const userCollection = database.collection("user");
+
+    app.get("/api/freelancers", async (req, res) => {
+      const cursor = userCollection.find()
+      const results = await cursor.toArray();
+      res.send(results);
+    });
 
     // API creation for tasks
     app.get("/api/tasks", async (req, res) => {
-      const query = {}
-      if(req.query.taskId) {
+      const query = {};
+      if (req.query.taskId) {
         query._id = req.query.taskId;
       }
-      if(req.query.status) {
+      if (req.query.status) {
         query.status = req.query.status;
       }
-      const cursor = taskCollection.find(query)
+      const cursor = taskCollection.find(query);
       const results = await cursor.toArray();
       res.send(results);
     });
 
     app.post("/api/tasks", async (req, res) => {
       const task = req.body;
-      const result = await taskCollection.insertOne(task);
+      const newTask = {
+        ...task,
+        createdAt: new Date(),
+      };
+      const result = await taskCollection.insertOne(newTask);
       res.send(result);
     });
 
