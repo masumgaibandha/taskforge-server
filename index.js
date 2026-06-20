@@ -83,6 +83,21 @@ app.post("/api/proposals", async (req, res) => {
   res.send(result);
 });
 
+app.get("/api/proposals", async (req, res) => {
+  const query = {};
+
+  if (req.query.clientEmail) {
+    query.clientEmail = req.query.clientEmail;
+  }
+
+  if (req.query.freelancerEmail) {
+    query.freelancerEmail = req.query.freelancerEmail;
+  }
+
+  const result = await proposalCollection.find(query).toArray();
+  res.send(result);
+});
+
 app.listen(port, () => {
   console.log(`TaskForge server running on port ${port}`);
 });
