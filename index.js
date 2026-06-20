@@ -95,6 +95,7 @@ app.get("/api/proposals", async (req, res) => {
   }
 
   const result = await proposalCollection.find(query).toArray();
+
   res.send(result);
 });
 
