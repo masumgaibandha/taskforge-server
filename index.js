@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
-
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 const app = express();
@@ -24,12 +24,82 @@ const database = client.db("taskforge_db");
 const taskCollection = database.collection("tasks");
 const userCollection = database.collection("user");
 const proposalCollection = database.collection("proposals");
+const paymentCollection = database.collection("payments");
 
 app.get("/", (req, res) => {
   res.send("TaskForge server is running");
 });
 
 // Api from here
+
+app.post("/api/confirm-payment", async (req, res) => {
+  const { sessionId } = req.body;
+
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+    if (session.payment_status !== "paid") {
+      return res.status(400).send({
+        message: "Payment not completed",
+      });
+    }
+
+    const proposalId = session.metadata.proposalId;
+    const taskId = session.metadata.taskId;
+
+    await proposalCollection.updateOne(
+      {
+        _id: new ObjectId(proposalId),
+      },
+      {
+        $set: {
+          status: "accepted",
+          updatedAt: new Date(),
+        },
+      },
+    );
+
+    await taskCollection.updateOne(
+      {
+        _id: new ObjectId(taskId),
+      },
+      {
+        $set: {
+          status: "in-progress",
+          updatedAt: new Date(),
+        },
+      },
+    );
+
+    const existingPayment = await paymentCollection.findOne({
+      sessionId,
+    });
+
+    if (!existingPayment) {
+      await paymentCollection.insertOne({
+        sessionId,
+        proposalId,
+        taskId,
+        clientEmail: session.metadata.clientEmail,
+        freelancerEmail: session.metadata.freelancerEmail,
+        amount: session.amount_total / 100,
+        currency: session.currency,
+        paymentStatus: session.payment_status,
+        createdAt: new Date(),
+      });
+    }
+
+    res.send({
+      success: true,
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).send({
+      message: "Payment verification failed",
+    });
+  }
+});
+
 app.get("/api/users/:email", async (req, res) => {
   const email = req.params.email;
 
@@ -67,7 +137,12 @@ app.get("/api/tasks", async (req, res) => {
     query.status = req.query.status;
   }
 
+  if (req.query.clientEmail) {
+    query.clientEmail = req.query.clientEmail;
+  }
+
   const result = await taskCollection.find(query).toArray();
+
   res.send(result);
 });
 
@@ -127,6 +202,17 @@ app.get("/api/freelancers", async (req, res) => {
 
 app.post("/api/proposals", async (req, res) => {
   const proposal = req.body;
+
+  const alreadySubmitted = await proposalCollection.findOne({
+    taskId: proposal.taskId,
+    freelancerEmail: proposal.freelancerEmail,
+  });
+
+  if (alreadySubmitted) {
+    return res.status(409).send({
+      message: "You already submitted a proposal for this task.",
+    });
+  }
 
   const newProposal = {
     ...proposal,
