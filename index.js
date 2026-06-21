@@ -174,10 +174,30 @@ app.patch("/api/users/:email", async (req, res) => {
 app.get("/api/tasks", async (req, res) => {
   const query = {};
 
-  if (req.query.status) query.status = req.query.status;
-  if (req.query.clientEmail) query.clientEmail = req.query.clientEmail;
+  if (req.query.status) {
+    query.status = req.query.status;
+  }
 
-  const result = await taskCollection.find(query).toArray();
+  if (req.query.clientEmail) {
+    query.clientEmail = req.query.clientEmail;
+  }
+
+  if (req.query.category && req.query.category !== "All Categories") {
+    query.category = req.query.category;
+  }
+
+  if (req.query.search) {
+    query.title = {
+      $regex: req.query.search,
+      $options: "i",
+    };
+  }
+
+  const result = await taskCollection
+    .find(query)
+    .sort({ createdAt: -1 })
+    .toArray();
+
   res.send(result);
 });
 
@@ -304,13 +324,89 @@ app.patch("/api/proposals/:id", async (req, res) => {
 app.get("/api/payments", async (req, res) => {
   const query = {};
 
-  if (req.query.clientEmail) query.clientEmail = req.query.clientEmail;
+  if (req.query.clientEmail) {
+    query.clientEmail = req.query.clientEmail;
+  }
+
   if (req.query.freelancerEmail) {
     query.freelancerEmail = req.query.freelancerEmail;
   }
 
   const result = await paymentCollection.find(query).toArray();
+
   res.send(result);
+});
+
+// Admin overview
+app.get("/api/admin/stats", async (req, res) => {
+  const totalUsers = await userCollection.countDocuments();
+  const totalTasks = await taskCollection.countDocuments();
+  const activeTasks = await taskCollection.countDocuments({
+    status: "in-progress",
+  });
+
+  const payments = await paymentCollection.find().toArray();
+  const totalRevenue = payments.reduce(
+    (total, payment) => total + Number(payment.amount || 0),
+    0,
+  );
+
+  res.send({
+    totalUsers,
+    totalTasks,
+    activeTasks,
+    totalRevenue,
+  });
+});
+
+// Admin manage users
+app.get("/api/admin/users", async (req, res) => {
+  const users = await userCollection.find().toArray();
+  res.send(users);
+});
+
+app.patch("/api/admin/users/:id/block", async (req, res) => {
+  const result = await userCollection.updateOne(
+    { _id: new ObjectId(req.params.id) },
+    {
+      $set: {
+        isBlocked: true,
+        updatedAt: new Date(),
+      },
+    },
+  );
+
+  res.send(result);
+});
+
+app.patch("/api/admin/users/:id/unblock", async (req, res) => {
+  const result = await userCollection.updateOne(
+    { _id: new ObjectId(req.params.id) },
+    {
+      $set: {
+        isBlocked: false,
+        updatedAt: new Date(),
+      },
+    },
+  );
+
+  res.send(result);
+});
+
+// Admin manage tasks
+app.get("/api/admin/tasks", async (req, res) => {
+  const tasks = await taskCollection.find().sort({ createdAt: -1 }).toArray();
+  res.send(tasks);
+});
+
+// Admin transactions
+app.get("/api/admin/transactions", async (req, res) => {
+  const transactions = await paymentCollection
+    .find()
+    .sort({ createdAt: -1 })
+    .toArray();
+
+  res.send(transactions);
 });
 
 app.listen(port, () => {
