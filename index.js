@@ -86,17 +86,47 @@ app.post("/api/create-checkout-session", async (req, res) => {
 app.post("/api/confirm-payment", async (req, res) => {
   const { sessionId } = req.body;
 
+  if (!sessionId) {
+    return res.status(400).send({
+      success: false,
+      message: "Session ID is required",
+    });
+  }
+
   try {
     const session = await stripe.checkout.sessions.retrieve(sessionId);
 
     if (session.payment_status !== "paid") {
       return res.status(400).send({
+        success: false,
         message: "Payment not completed",
       });
     }
 
     const proposalId = session.metadata.proposalId;
     const taskId = session.metadata.taskId;
+
+    const proposal = await proposalCollection.findOne({
+      _id: new ObjectId(proposalId),
+    });
+
+    if (!proposal) {
+      return res.status(404).send({
+        success: false,
+        message: "Proposal not found",
+      });
+    }
+
+    const task = await taskCollection.findOne({
+      _id: new ObjectId(taskId),
+    });
+
+    if (!task) {
+      return res.status(404).send({
+        success: false,
+        message: "Task not found",
+      });
+    }
 
     await proposalCollection.updateOne(
       { _id: new ObjectId(proposalId) },
@@ -108,11 +138,27 @@ app.post("/api/confirm-payment", async (req, res) => {
       },
     );
 
+    await proposalCollection.updateMany(
+      {
+        taskId,
+        _id: { $ne: new ObjectId(proposalId) },
+      },
+      {
+        $set: {
+          status: "rejected",
+          updatedAt: new Date(),
+        },
+      },
+    );
+
     await taskCollection.updateOne(
       { _id: new ObjectId(taskId) },
       {
         $set: {
           status: "in-progress",
+          acceptedProposalId: proposalId,
+          freelancerEmail: session.metadata.freelancerEmail,
+          freelancerName: proposal.freelancerName,
           updatedAt: new Date(),
         },
       },
@@ -120,24 +166,45 @@ app.post("/api/confirm-payment", async (req, res) => {
 
     const existingPayment = await paymentCollection.findOne({ sessionId });
 
+    let payment = existingPayment;
+
     if (!existingPayment) {
-      await paymentCollection.insertOne({
+      const paymentDoc = {
         sessionId,
         proposalId,
         taskId,
         clientEmail: session.metadata.clientEmail,
         freelancerEmail: session.metadata.freelancerEmail,
+        freelancerName: proposal.freelancerName,
+        taskTitle: proposal.taskTitle || task.title,
         amount: session.amount_total / 100,
         currency: session.currency,
         paymentStatus: session.payment_status,
         createdAt: new Date(),
-      });
+      };
+
+      const result = await paymentCollection.insertOne(paymentDoc);
+
+      payment = {
+        _id: result.insertedId,
+        ...paymentDoc,
+      };
     }
 
-    res.send({ success: true });
+    res.send({
+      success: true,
+      payment: {
+        taskTitle: payment.taskTitle || proposal.taskTitle || task.title,
+        freelancerName: payment.freelancerName || proposal.freelancerName,
+        amount: payment.amount,
+        currency: payment.currency,
+        paymentStatus: payment.paymentStatus,
+      },
+    });
   } catch (error) {
     console.log(error);
     res.status(500).send({
+      success: false,
       message: "Payment verification failed",
     });
   }
@@ -172,33 +239,54 @@ app.patch("/api/users/:email", async (req, res) => {
 
 // Tasks
 app.get("/api/tasks", async (req, res) => {
-  const query = {};
+  try {
+    const query = {};
 
-  if (req.query.status) {
-    query.status = req.query.status;
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 9;
+    const skip = (page - 1) * limit;
+
+    if (req.query.status) {
+      query.status = req.query.status;
+    }
+
+    if (req.query.clientEmail) {
+      query.clientEmail = req.query.clientEmail;
+    }
+
+    if (req.query.category && req.query.category !== "All Categories") {
+      query.category = req.query.category;
+    }
+
+    if (req.query.search) {
+      query.title = {
+        $regex: req.query.search,
+        $options: "i",
+      };
+    }
+
+    const total = await taskCollection.countDocuments(query);
+
+    const tasks = await taskCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+    res.send({
+      tasks,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).send({
+      message: "Failed to load tasks",
+    });
   }
-
-  if (req.query.clientEmail) {
-    query.clientEmail = req.query.clientEmail;
-  }
-
-  if (req.query.category && req.query.category !== "All Categories") {
-    query.category = req.query.category;
-  }
-
-  if (req.query.search) {
-    query.title = {
-      $regex: req.query.search,
-      $options: "i",
-    };
-  }
-
-  const result = await taskCollection
-    .find(query)
-    .sort({ createdAt: -1 })
-    .toArray();
-
-  res.send(result);
 });
 
 app.get("/api/tasks/:id", async (req, res) => {
@@ -307,17 +395,46 @@ app.post("/api/proposals", async (req, res) => {
 app.patch("/api/proposals/:id", async (req, res) => {
   const { status } = req.body;
 
-  const result = await proposalCollection.updateOne(
-    { _id: new ObjectId(req.params.id) },
-    {
-      $set: {
-        status,
-        updatedAt: new Date(),
-      },
-    },
-  );
+  if (status !== "rejected") {
+    return res.status(400).send({
+      message: "Proposal status can only be manually changed to rejected.",
+    });
+  }
 
-  res.send(result);
+  try {
+    const proposal = await proposalCollection.findOne({
+      _id: new ObjectId(req.params.id),
+    });
+
+    if (!proposal) {
+      return res.status(404).send({
+        message: "Proposal not found",
+      });
+    }
+
+    if (proposal.status !== "pending") {
+      return res.status(400).send({
+        message: "Only pending proposals can be rejected.",
+      });
+    }
+
+    const result = await proposalCollection.updateOne(
+      { _id: new ObjectId(req.params.id) },
+      {
+        $set: {
+          status: "rejected",
+          updatedAt: new Date(),
+        },
+      },
+    );
+
+    res.send(result);
+  } catch (error) {
+    console.log(error);
+    res.status(500).send({
+      message: "Failed to update proposal status",
+    });
+  }
 });
 
 // Payments
