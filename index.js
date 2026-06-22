@@ -254,6 +254,10 @@ app.get("/api/tasks", async (req, res) => {
       query.clientEmail = req.query.clientEmail;
     }
 
+    if (req.query.freelancerEmail) {
+      query.freelancerEmail = req.query.freelancerEmail;
+    }
+
     if (req.query.category && req.query.category !== "All Categories") {
       query.category = req.query.category;
     }
