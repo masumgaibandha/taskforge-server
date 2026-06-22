@@ -332,11 +332,32 @@ app.patch("/api/tasks/:id", async (req, res) => {
 });
 
 app.delete("/api/tasks/:id", async (req, res) => {
-  const result = await taskCollection.deleteOne({
-    _id: new ObjectId(req.params.id),
-  });
+  try {
+    const taskId = req.params.id;
 
-  res.send(result);
+    const acceptedProposal = await proposalCollection.findOne({
+      taskId,
+      status: "accepted",
+    });
+
+    if (acceptedProposal) {
+      return res.status(400).send({
+        message:
+          "This task cannot be deleted because a proposal has already been accepted.",
+      });
+    }
+
+    const result = await taskCollection.deleteOne({
+      _id: new ObjectId(taskId),
+    });
+
+    res.send(result);
+  } catch (error) {
+    console.log(error);
+    res.status(500).send({
+      message: "Failed to delete task",
+    });
+  }
 });
 
 // Freelancers
