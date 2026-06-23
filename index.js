@@ -26,6 +26,7 @@ const taskCollection = database.collection("tasks");
 const userCollection = database.collection("user");
 const proposalCollection = database.collection("proposals");
 const paymentCollection = database.collection("payments");
+const reviewCollection = database.collection("reviews");
 
 app.get("/", (req, res) => {
   res.send("TaskForge server is running");
@@ -165,7 +166,6 @@ app.post("/api/confirm-payment", async (req, res) => {
     );
 
     const existingPayment = await paymentCollection.findOne({ sessionId });
-
     let payment = existingPayment;
 
     if (!existingPayment) {
@@ -217,24 +217,42 @@ app.get("/api/users/:email", async (req, res) => {
 });
 
 app.patch("/api/users/:email", async (req, res) => {
-  const updatedUser = req.body;
+  try {
+    const updatedUser = req.body;
 
-  const result = await userCollection.updateOne(
-    { email: req.params.email },
-    {
-      $set: {
-        name: updatedUser.name,
-        image: updatedUser.image,
-        phone: updatedUser.phone,
-        location: updatedUser.location,
-        website: updatedUser.website,
-        bio: updatedUser.bio,
-        updatedAt: new Date(),
-      },
-    },
-  );
+    const updateDoc = {
+      updatedAt: new Date(),
+    };
 
-  res.send(result);
+    if (updatedUser.name !== undefined) updateDoc.name = updatedUser.name;
+    if (updatedUser.image !== undefined) updateDoc.image = updatedUser.image;
+    if (updatedUser.phone !== undefined) updateDoc.phone = updatedUser.phone;
+    if (updatedUser.location !== undefined) {
+      updateDoc.location = updatedUser.location;
+    }
+    if (updatedUser.website !== undefined)
+      updateDoc.website = updatedUser.website;
+    if (updatedUser.bio !== undefined) updateDoc.bio = updatedUser.bio;
+    if (updatedUser.skills !== undefined)
+      updateDoc.skills = updatedUser.skills || [];
+    if (updatedUser.hourlyRate !== undefined) {
+      updateDoc.hourlyRate = Number(updatedUser.hourlyRate || 0);
+    }
+    if (updatedUser.verified !== undefined) {
+      updateDoc.verified = Boolean(updatedUser.verified);
+    }
+
+    const result = await userCollection.updateOne(
+      { email: req.params.email },
+      { $set: updateDoc },
+    );
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to update user profile",
+    });
+  }
 });
 
 // Tasks
@@ -246,17 +264,10 @@ app.get("/api/tasks", async (req, res) => {
     const limit = Number(req.query.limit) || 9;
     const skip = (page - 1) * limit;
 
-    if (req.query.status) {
-      query.status = req.query.status;
-    }
-
-    if (req.query.clientEmail) {
-      query.clientEmail = req.query.clientEmail;
-    }
-
-    if (req.query.freelancerEmail) {
+    if (req.query.status) query.status = req.query.status;
+    if (req.query.clientEmail) query.clientEmail = req.query.clientEmail;
+    if (req.query.freelancerEmail)
       query.freelancerEmail = req.query.freelancerEmail;
-    }
 
     if (req.query.category && req.query.category !== "All Categories") {
       query.category = req.query.category;
@@ -366,8 +377,100 @@ app.delete("/api/tasks/:id", async (req, res) => {
 
 // Freelancers
 app.get("/api/freelancers", async (req, res) => {
-  const result = await userCollection.find({ role: "freelancer" }).toArray();
-  res.send(result);
+  try {
+    const freelancers = await userCollection
+      .find({ role: "freelancer" })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const freelancersWithStats = await Promise.all(
+      freelancers.map(async (freelancer) => {
+        const reviews = await reviewCollection
+          .find({ revieweeEmail: freelancer.email })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        const completedJobs = await taskCollection.countDocuments({
+          freelancerEmail: freelancer.email,
+          status: "completed",
+        });
+
+        const totalReviews = reviews.length;
+
+        const averageRating =
+          totalReviews > 0
+            ? (
+                reviews.reduce(
+                  (sum, review) => sum + Number(review.rating || 0),
+                  0,
+                ) / totalReviews
+              ).toFixed(1)
+            : 0;
+
+        return {
+          ...freelancer,
+          averageRating: Number(averageRating),
+          totalReviews,
+          completedJobs,
+        };
+      }),
+    );
+
+    res.send(freelancersWithStats);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to load freelancers",
+    });
+  }
+});
+
+app.get("/api/freelancers/:id", async (req, res) => {
+  try {
+    const freelancer = await userCollection.findOne({
+      _id: new ObjectId(req.params.id),
+      role: "freelancer",
+    });
+
+    if (!freelancer) {
+      return res.status(404).send({
+        message: "Freelancer not found",
+      });
+    }
+
+    const reviews = await reviewCollection
+      .find({ revieweeEmail: freelancer.email })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const completedJobs = await taskCollection.countDocuments({
+      freelancerEmail: freelancer.email,
+      status: "completed",
+    });
+
+    const totalReviews = reviews.length;
+
+    const averageRating =
+      totalReviews > 0
+        ? (
+            reviews.reduce(
+              (sum, review) => sum + Number(review.rating || 0),
+              0,
+            ) / totalReviews
+          ).toFixed(1)
+        : 0;
+
+    res.send({
+      ...freelancer,
+      reviews,
+      averageRating: Number(averageRating),
+      totalReviews,
+      completedJobs,
+    });
+  } catch (error) {
+    res.status(400).send({
+      message: "Invalid freelancer id",
+    });
+  }
 });
 
 // Proposals
@@ -375,11 +478,14 @@ app.get("/api/proposals", async (req, res) => {
   const query = {};
 
   if (req.query.clientEmail) query.clientEmail = req.query.clientEmail;
-  if (req.query.freelancerEmail) {
+  if (req.query.freelancerEmail)
     query.freelancerEmail = req.query.freelancerEmail;
-  }
 
-  const result = await proposalCollection.find(query).toArray();
+  const result = await proposalCollection
+    .find(query)
+    .sort({ createdAt: -1 })
+    .toArray();
+
   res.send(result);
 });
 
@@ -466,17 +572,71 @@ app.patch("/api/proposals/:id", async (req, res) => {
 app.get("/api/payments", async (req, res) => {
   const query = {};
 
-  if (req.query.clientEmail) {
-    query.clientEmail = req.query.clientEmail;
-  }
-
-  if (req.query.freelancerEmail) {
+  if (req.query.clientEmail) query.clientEmail = req.query.clientEmail;
+  if (req.query.freelancerEmail)
     query.freelancerEmail = req.query.freelancerEmail;
-  }
 
-  const result = await paymentCollection.find(query).toArray();
+  const result = await paymentCollection
+    .find(query)
+    .sort({ createdAt: -1 })
+    .toArray();
 
   res.send(result);
+});
+
+// Reviews
+app.post("/api/reviews", async (req, res) => {
+  try {
+    const review = req.body;
+
+    const existingReview = await reviewCollection.findOne({
+      taskId: review.taskId,
+      reviewerEmail: review.reviewerEmail,
+    });
+
+    if (existingReview) {
+      return res.status(400).send({
+        message: "You have already reviewed this task.",
+      });
+    }
+
+    const result = await reviewCollection.insertOne({
+      taskId: review.taskId,
+      taskTitle: review.taskTitle,
+      reviewerEmail: review.reviewerEmail,
+      revieweeEmail: review.revieweeEmail,
+      rating: Number(review.rating),
+      comment: review.comment,
+      createdAt: new Date(),
+    });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to submit review",
+    });
+  }
+});
+
+app.get("/api/reviews", async (req, res) => {
+  try {
+    const query = {};
+
+    if (req.query.taskId) query.taskId = req.query.taskId;
+    if (req.query.revieweeEmail) query.revieweeEmail = req.query.revieweeEmail;
+    if (req.query.reviewerEmail) query.reviewerEmail = req.query.reviewerEmail;
+
+    const reviews = await reviewCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.send(reviews);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to load reviews",
+    });
+  }
 });
 
 // Admin overview
@@ -488,6 +648,7 @@ app.get("/api/admin/stats", async (req, res) => {
   });
 
   const payments = await paymentCollection.find().toArray();
+
   const totalRevenue = payments.reduce(
     (total, payment) => total + Number(payment.amount || 0),
     0,
@@ -503,7 +664,7 @@ app.get("/api/admin/stats", async (req, res) => {
 
 // Admin manage users
 app.get("/api/admin/users", async (req, res) => {
-  const users = await userCollection.find().toArray();
+  const users = await userCollection.find().sort({ createdAt: -1 }).toArray();
   res.send(users);
 });
 
